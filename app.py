@@ -281,21 +281,21 @@ elif page == "Historial Atmosférico":
                 # Gráfico de dispersión para ver la relación
                 st.scatter_chart(df, x='Humidity', y='Air Quality', color="#8b6508")
             
-        with col_ia2:
-            st.markdown(f"""
-            <div style="background-color: rgba(139, 101, 8, 0.1); border: 1px solid #8b6508; padding: 15px; border-radius: 10px;">
-                <p style='color: #d4af37; font-size: 0.9em; margin:0;'>Coeficiente de Correlación:</p>
-                <h2 style='margin:0;'>{correlation:.2f}</h2>
-                <hr style='border-color: #8b6508;'>
-                <p style='font-size: 0.85em; font-style: italic;'>
-                    { "Alta relación positiva" if correlation > 0.7 else 
-                      "Relación moderada" if correlation > 0.4 else 
-                      "Baja correlación técnica" if correlation > -0.4 else 
-                      "Relación inversa detectada" }
-                </p>
-                <p style='font-size: 0.8em;'>Este análisis indica cómo influye el vapor de agua en la conductividad del sensor de gas.</p>
-            </div>
-            """, unsafe_allow_html=True)
+            with col_ia2:
+                st.markdown(f"""
+                <div style="background-color: rgba(139, 101, 8, 0.1); border: 1px solid #8b6508; padding: 15px; border-radius: 10px;">
+                    <p style='color: #d4af37; font-size: 0.9em; margin:0;'>Coeficiente de Correlación:</p>
+                    <h2 style='margin:0;'>{correlation:.2f}</h2>
+                    <hr style='border-color: #8b6508;'>
+                    <p style='font-size: 0.85em; font-style: italic;'>
+                        { "Alta relación positiva" if correlation > 0.7 else 
+                          "Relación moderada" if correlation > 0.4 else 
+                          "Baja correlación técnica" if correlation > -0.4 else 
+                          "Relación inversa detectada" }
+                    </p>
+                    <p style='font-size: 0.8em;'>Este análisis indica cómo influye el vapor de agua en la conductividad del sensor de gas.</p>
+                </div>
+                """, unsafe_allow_html=True)
         
         # Visualizar tabla de datos
         with st.expander("📜 Ver Registros en Bruto"):
