@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+.DS_Store
+air_batches_15m.jsonl
+air_samples.jsonl
+*.log
