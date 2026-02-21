@@ -239,8 +239,8 @@ elif page == "Historial Atmosférico":
     if df is not None and not df.empty:
         # Intentar normalizar nombres de columnas
         df = df.rename(columns={
-            "temperature_last": "Temperature", "temperature": "Temperature", "Temp": "Temperature",
-            "humidity_last": "Humidity", "humidity": "Humidity", "Humidity": "Humidity",
+            "temperature_last": "Temperature", "temperature": "Temperature", "Temp": "Temperature", "temp_avg": "Temperature", "temp": "Temperature",
+            "humidity_last": "Humidity", "humidity": "Humidity", "Humidity": "Humidity", "hum_avg": "Humidity", "hum": "Humidity",
             "air_score_last": "Air Quality", "air_score": "Air Quality", "score": "Air Quality"
         })
         # Mostrar Resumen estadístico estilo antiguo
