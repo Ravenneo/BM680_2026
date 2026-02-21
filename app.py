@@ -246,41 +246,43 @@ elif page == "Historial Atmosférico":
             "humidity_last": "Humidity", "humidity": "Humidity", "Humidity": "Humidity",
             "air_score_last": "Air Quality", "air_score": "Air Quality", "score": "Air Quality"
         })
-        
-        # Intentar manejar el tiempo
-        if 'timestamp' in df.columns:
-            df['time'] = pd.to_datetime(df['timestamp'])
-            df = df.set_index('time')
-        elif 'time' in df.columns:
-            df['time'] = pd.to_datetime(df['time'])
-            df = df.set_index('time')
-
         # Mostrar Resumen estadístico estilo antiguo
         st.subheader("📊 Resumen de la Expedición")
         stats_col1, stats_col2, stats_col3 = st.columns(3)
-        stats_col1.metric("Máx Temp", f"{df['Temperature'].max():.1f} °C")
-        stats_col2.metric("Mín Hum", f"{df['Humidity'].min():.1f} %")
-        stats_col3.metric("Calidad Promedio", f"{df['Air Quality'].mean():.1f}")
+        
+        # Safe extraction
+        max_temp = df['Temperature'].max() if 'Temperature' in df.columns else 0.0
+        min_hum = df['Humidity'].min() if 'Humidity' in df.columns else 0.0
+        avg_aq = df['Air Quality'].mean() if 'Air Quality' in df.columns else 0.0
+
+        stats_col1.metric("Máx Temp", f"{max_temp:.1f} °C")
+        stats_col2.metric("Mín Hum", f"{min_hum:.1f} %")
+        stats_col3.metric("Calidad Promedio", f"{avg_aq:.1f}")
 
         # Gráficas
         st.subheader("📈 Gráficas de Evolución")
         
         # Gráfica de Temperatura y Humedad
         st.write("**Evolución Térmica y de Humedad**")
-        st.line_chart(df[['Temperature', 'Humidity']])
+        available_cols = [c for c in ['Temperature', 'Humidity'] if c in df.columns]
+        if available_cols:
+            st.line_chart(df[available_cols])
         
         # Gráfica de Calidad de Aire
         st.subheader("🧪 Análisis de Correlación (IA)");
         st.write("**Estudio de Impacto Ambiental: Humedad vs Calidad**")
         
-        # Análisis de correlación simple
-        correlation = df['Humidity'].corr(df['Air Quality'])
-        
-        col_ia1, col_ia2 = st.columns([2, 1])
-        
-        with col_ia1:
-            # Gráfico de dispersión para ver la relación
-            st.scatter_chart(df, x='Humidity', y='Air Quality', color="#8b6508")
+        if 'Humidity' in df.columns and 'Air Quality' in df.columns:
+            # Análisis de correlación simple
+            correlation = df['Humidity'].corr(df['Air Quality'])
+            # Handle NaN from corr
+            if pd.isna(correlation): correlation = 0.0
+            
+            col_ia1, col_ia2 = st.columns([2, 1])
+            
+            with col_ia1:
+                # Gráfico de dispersión para ver la relación
+                st.scatter_chart(df, x='Humidity', y='Air Quality', color="#8b6508")
             
         with col_ia2:
             st.markdown(f"""
