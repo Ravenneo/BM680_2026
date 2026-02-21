@@ -43,7 +43,12 @@ Estos scripts están diseñados para correr en una Raspberry Pi con los sensores
    ```
    *Esto lanzará el registro en background y encenderá la matriz indicando el "Warmup" (Precalentamiento azul/celeste).*
 
-### 2. Configuración de la Estación de Comando (PC Local)
+### 🚀 Lanzamiento Rápido (Windows)
+Para tu comodidad, he incluido un archivo llamado `Lanzar_Dashboard.bat`. Solo tienes que hacer **doble clic** en él y hará todo por ti: 
+1. Abrirá el sincronizador en segundo plano.
+2. Lanzará el Dashboard en tu navegador.
+
+### 2. Configuración Manual de la Estación de Comando (PC Local)
 La PC es la encargada de hacer *pull* de los datos y renderizar el Dashboard al usuario.
 
 1. **Instalar dependencias de Python:**
