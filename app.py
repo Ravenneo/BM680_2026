@@ -256,21 +256,31 @@ elif page == "Historial Atmosférico":
         stats_col2.metric("Mín Hum", f"{min_hum:.1f} %")
         stats_col3.metric("Calidad Promedio", f"{avg_aq:.1f}")
 
+        # --- OPTIMIZACIÓN DE RENDIMIENTO (DOWNSAMPLING) ---
+        MAX_POINTS = 1000
+        total_rows = len(df)
+        if total_rows > MAX_POINTS:
+            step = total_rows // MAX_POINTS
+            df_plot = df.iloc[::step]
+            st.caption(f"⚡ *Modo Optimizador Activo: Mostrando {len(df_plot)} muestras representativas de un total de {total_rows} para evitar sobrecarga del navegador.*")
+        else:
+            df_plot = df
+
         # Gráficas
         st.subheader("📈 Gráficas de Evolución")
         
         # Gráfica de Temperatura y Humedad
         st.write("**Evolución Térmica y de Humedad**")
-        available_cols = [c for c in ['Temperature', 'Humidity'] if c in df.columns]
+        available_cols = [c for c in ['Temperature', 'Humidity'] if c in df_plot.columns]
         if available_cols:
-            st.line_chart(df[available_cols])
+            st.line_chart(df_plot[available_cols])
         
         # Gráfica de Calidad de Aire
         st.subheader("🧪 Análisis de Correlación (IA)");
         st.write("**Estudio de Impacto Ambiental: Humedad vs Calidad**")
         
         if 'Humidity' in df.columns and 'Air Quality' in df.columns:
-            # Análisis de correlación simple
+            # Análisis de correlación simple (Usando el DataFrame completo, NO el diezmado, para precisión IA)
             correlation = df['Humidity'].corr(df['Air Quality'])
             # Handle NaN from corr
             if pd.isna(correlation): correlation = 0.0
@@ -278,8 +288,8 @@ elif page == "Historial Atmosférico":
             col_ia1, col_ia2 = st.columns([2, 1])
             
             with col_ia1:
-                # Gráfico de dispersión para ver la relación
-                st.scatter_chart(df, x='Humidity', y='Air Quality', color="#8b6508")
+                # Gráfico de dispersión para ver la relación (Este sí usa el diezmado para cargar rápido)
+                st.scatter_chart(df_plot, x='Humidity', y='Air Quality', color="#8b6508")
             
             with col_ia2:
                 st.markdown(f"""
