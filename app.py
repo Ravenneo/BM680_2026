@@ -71,9 +71,6 @@ page = st.sidebar.radio("Seleccionar Vista:", ["Real-Time", "Historial Atmosfér
 
 # Auto-refresh cada 30 segundos en Real-Time
 auto_refresh = st.sidebar.checkbox("Sincronización Automática (30s)", value=True)
-if auto_refresh and page == "Real-Time":
-    time.sleep(30)
-    st.rerun()
 
 # Rutas locales
 BATCH_PATH = "air_batches_15m.jsonl"
@@ -308,3 +305,8 @@ elif page == "Historial Atmosférico":
     else:
         st.info(f"📜 El archivo de bitácora `{file_path}` aún no ha sido sincronizado o está vacío.")
         st.image("https://www.publicdomainpictures.net/pictures/30000/velka/old-paper-texture-1.jpg", width=400)
+
+# Manejo del auto-refresh (Al final para no bloquear la carga visual)
+if page == "Real-Time" and auto_refresh:
+    time.sleep(30)
+    st.rerun()
