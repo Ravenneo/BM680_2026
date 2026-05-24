@@ -1,4 +1,5 @@
 # RAVEN FIELD STATION
+<img width="1091" height="531" alt="Captura de pantalla 2026-05-24 135940" src="https://github.com/user-attachments/assets/5e9f8708-07be-418b-a026-593770f93b10" />
 
 Terminal dashboard for the local BME680 air sensor and Geiger-Muller counter.
 
