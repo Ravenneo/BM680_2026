@@ -8,6 +8,7 @@ Un sistema completo de recolección, sincronización y visualización (con esté
 3. **Puesto de Mando (Dashboard Web):** Aplicación interactiva construida con `Streamlit` y decorada con un estilo Neo-Victoriano / Steampunk. Incluye:
     - **Panel "En Vivo":** Estadísticas y un widget con engranajes SVG animados que refleja al milisegundo e **inyectando el mismo algoritmo de mezcla de color RGB nativo** el estado de la Raspberry Pi.
     - **Historial Atmosférico:** Selección de granularidad de registro y análisis visual profundo (Cálculos de correlación matemática AI-driven entre Humedad vs Calidad de Aire).
+4. **RAVEN FIELD STATION:** Consola terminal premium con `Rich` para `tmux`/SSH que combina el nodo BME680 con un contador Geiger-Muller local, mostrando telemetría ambiental, radiación, salud de sesión y eventos recientes en vivo.
 
 ## 📂 Estructura del Proyecto
 
@@ -18,6 +19,17 @@ BM680_2026/
 ├── requirements.txt            # Dependencias del lado PC
 ├── .gitignore
 ├── README.md
+├── field_station/              # Dashboard terminal Rich + integración Geiger
+│   ├── README.md
+│   ├── requirements.txt
+│   ├── arduino/
+│   │   └── GeigerUsbQuiet/
+│   │       └── GeigerUsbQuiet.ino
+│   └── tools/
+│       ├── raven_field_station.py
+│       ├── geiger_serial_logger.py
+│       ├── air_sensor_logger.py
+│       └── start_raven_field_station.sh
 └── raspberry_pi_scripts/       # Scripts ORIGINALES que corren dentro de la Raspberry Pi
     ├── air_logger.py           # Demonio de lectura primaria (Salida CSV/JSONL)
     ├── led_tiles_bme680.py     # Demonio visual (Matriz 5x5 RGB interactiva)
@@ -64,9 +76,36 @@ La PC es la encargada de hacer *pull* de los datos y renderizar el Dashboard al 
 3. **Desplegar el Dashboard Steampunk:**
    En una _nueva_ ventana de terminal, lanza la app web:
    ```bash
-   python -m streamlit run app.py
-   ```
-   La aplicación se abrirá en tu navegador nativo revelando el panel. ¡Asegúrate de encender la opción de auto-sincronización en el panel lateral!
+    python -m streamlit run app.py
+    ```
+    La aplicación se abrirá en tu navegador nativo revelando el panel. ¡Asegúrate de encender la opción de auto-sincronización en el panel lateral!
+
+### 3. RAVEN FIELD STATION (Terminal / tmux)
+La vista terminal vive en `field_station/` y está pensada para una sesión SSH o `tmux` grande.
+
+```bash
+pip install -r requirements.txt
+python3 field_station/tools/raven_field_station.py
+```
+
+También puedes lanzar los loggers auxiliares para poblar los estados locales:
+
+```bash
+cd field_station
+python3 tools/geiger_serial_logger.py --port /dev/ttyUSB0 --baud 9600
+python3 tools/air_sensor_logger.py --host 192.168.0.149 --user pi
+```
+
+La consola lee:
+
+```text
+/tmp/geiger_state.json
+/tmp/geiger_serial.log
+/tmp/air_state.json
+/tmp/air_sensor.log
+```
+
+Más detalles en [`field_station/README.md`](field_station/README.md).
 
 ## 🔧 Licencia & Contribución
 Proyecto creado para experimentación IoT, Steampunk Aesthetics y monitoreo ambiental profundo. Siéntete libre de clonarlo, romperlo y arreglarlo. ⚙️🚂
