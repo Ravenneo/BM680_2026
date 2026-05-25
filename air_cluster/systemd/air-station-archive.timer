@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Air-Station archive push periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=air-station-archive.service
+
+[Install]
+WantedBy=timers.target

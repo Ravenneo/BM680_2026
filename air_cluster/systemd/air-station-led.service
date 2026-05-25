@@ -1,0 +1,15 @@
+[Unit]
+Description=Air-Station RGB Matrix 5x5 status display
+After=air-station-logger.service
+Wants=air-station-logger.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/BM680_2026/air_cluster
+ExecStart=/home/pi/BM680_2026/air_cluster/.venv/bin/python /home/pi/BM680_2026/air_cluster/station_led_matrix.py --config /home/pi/BM680_2026/air_cluster/config.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

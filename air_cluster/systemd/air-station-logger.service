@@ -1,0 +1,15 @@
+[Unit]
+Description=Air-Station environmental and gas logger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/BM680_2026/air_cluster
+ExecStart=/home/pi/BM680_2026/air_cluster/.venv/bin/python /home/pi/BM680_2026/air_cluster/station_logger.py --config /home/pi/BM680_2026/air_cluster/config.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

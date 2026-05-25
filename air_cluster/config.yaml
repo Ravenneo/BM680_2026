@@ -1,0 +1,68 @@
+{
+  "schema_version": "air_cluster.config.v1",
+  "node": {
+    "name": "Air-Station",
+    "role": "active_measurement_node",
+    "hardware_model": "Raspberry Pi Zero 2W",
+    "hardware_generation": "v2_bme690_mics6814"
+  },
+  "archive": {
+    "enabled": true,
+    "host": "192.168.0.149",
+    "user": "pi",
+    "port": 22,
+    "remote_dir": "/home/pi/air_archive/air_station",
+    "ssh_key": "/home/pi/.ssh/id_ed25519"
+  },
+  "paths": {
+    "data_dir": "data",
+    "raw_samples": "data/raw_samples.jsonl",
+    "hourly_batches": "data/hourly_batches.jsonl",
+    "daily_summary": "data/daily_summary.jsonl",
+    "latest_state": "data/latest_state.json",
+    "archive_status": "data/archive_status.json",
+    "archive_log": "data/archive_push.log"
+  },
+  "sampling": {
+    "sample_interval_seconds": 10,
+    "warmup_seconds": 600,
+    "hourly_batch_seconds": 3600
+  },
+  "baselines": {
+    "min_samples": 60,
+    "ema_alpha": 0.01,
+    "max_update_delta_pct": 35.0
+  },
+  "thresholds": {
+    "voc_delta_pct": -15.0,
+    "mics_reducing_delta_pct": 20.0,
+    "mics_oxidising_delta_pct": 20.0,
+    "mics_nh3_delta_pct": 20.0,
+    "mixed_event_count": 2
+  },
+  "led": {
+    "brightness": 1.0,
+    "min_brightness": 0.18,
+    "max_brightness": 0.82,
+    "random_decay": 0.92,
+    "frame_interval_seconds": 0.35,
+    "stale_after_seconds": 120,
+    "gamma": 1.25,
+    "shape_period_seconds": 11.0,
+    "shape_fade_speed": 0.30,
+    "organic_wobble": 0.08
+  },
+  "sensors": {
+    "bme690": {
+      "enabled": true,
+      "i2c_primary": "0x76",
+      "i2c_secondary": "0x77",
+      "heater_temperature_c": 320,
+      "heater_duration_ms": 150
+    },
+    "mics6814": {
+      "enabled": true,
+      "onboard_led_brightness": 0.0
+    }
+  }
+}

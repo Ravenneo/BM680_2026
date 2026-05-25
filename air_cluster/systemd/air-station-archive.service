@@ -1,0 +1,10 @@
+[Unit]
+Description=Rsync Air-Station data snapshots to Air-Sensor archive node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/BM680_2026/air_cluster
+ExecStart=/home/pi/BM680_2026/air_cluster/.venv/bin/python /home/pi/BM680_2026/air_cluster/archive_push.py --config /home/pi/BM680_2026/air_cluster/config.yaml

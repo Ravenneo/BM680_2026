@@ -145,6 +145,13 @@ def status_style(status: str) -> str:
     }.get(status, "bold white")
 
 
+def status_badge(label: str, status: str) -> Text:
+    text = Text()
+    text.append(f"{label}: ", style="dim")
+    text.append(status, style=status_style(status))
+    return text
+
+
 def bar(value, low: float, high: float, width: int = 24, style: str = "green") -> Text:
     text = Text()
     numeric = safe_float(value)
@@ -183,12 +190,21 @@ def append_history(history: dict[str, deque], key: str, value, marker) -> None:
     history[marker_key] = marker
 
 
+def source_age_label(label: str, age: float | None, threshold: float = 12.0) -> Text:
+    state = "WAITING" if age is None else ("ONLINE" if age <= threshold else "STALE")
+    text = Text()
+    text.append(f"{label}: ", style="dim")
+    text.append(state, style=status_style(state))
+    text.append(f" {fmt(age, 1, 's')}")
+    return text
+
+
 def make_header() -> Panel:
     stamp = datetime.now().strftime("%H:%M:%S")
     title = Text()
     title.append(" RAVEN FIELD STATION ", style="bold bright_cyan")
     title.append("| Environmental + Radiation Telemetry ", style="bright_white")
-    title.append("| NODE JACK ONLINE ", style="bold green")
+    title.append("| NODE ONLINE ", style="bold green")
     title.append(f"| {stamp}", style="dim")
     return Panel(Align.center(title), box=box.DOUBLE, border_style="bright_cyan", padding=(0, 1))
 
@@ -230,18 +246,26 @@ def make_air_panel(state: dict, json_status: str, history: dict[str, deque]) -> 
     status_line.append(f"   Sample age: {fmt(age, 1, 's')}")
 
     rows = Table.grid(expand=True)
-    rows.add_row(status_line)
-    rows.add_row("")
-    rows.add_row(metric_row("Air Score", fmt(score, 1), air_state, bar(score, 0, 100, style="green")))
-    rows.add_row(metric_row("Temp", fmt(temp, 1, " C"), "", bar(temp, 15, 40, style="orange3")))
-    rows.add_row(metric_row("Humidity", fmt(hum, 1, " %"), "", bar(hum, 20, 80, style="cyan")))
-    rows.add_row(metric_row("Gas", fmt(gas / 1000 if gas else None, 0, " kOhm"), "", bar(gas, 1000000, 3500000, style="magenta")))
-    rows.add_row("")
-    rows.add_row(f"Air trend   [green]{sparkline(history['air_score'])}[/]")
-    rows.add_row(f"Temp trend  [orange3]{sparkline(history['temp'])}[/]")
-    rows.add_row(f"Hum trend   [cyan]{sparkline(history['hum'])}[/]")
-    rows.add_row("")
-    rows.add_row(f"Sample      {state.get('ts', '-')}")
+    rows.add_column(ratio=1)
+    rows.add_column(ratio=1)
+    rows.add_row(status_line, Text.assemble(("Link ", "dim"), (link_status, status_style(link_status)), ("  ", "dim"), ("Sample ", "dim"), (fmt(age, 1, "s"), "bright_white")))
+    rows.add_row(
+        metric_row("Air Score", fmt(score, 1), air_state, bar(score, 0, 100, style="green")),
+        metric_row("Gas", fmt(gas / 1000 if gas else None, 0, " kOhm"), "", bar(gas, 1000000, 3500000, style="magenta")),
+    )
+    rows.add_row(
+        metric_row("Temp", fmt(temp, 1, " C"), "", bar(temp, 15, 40, style="orange3")),
+        metric_row("Humidity", fmt(hum, 1, " %"), "", bar(hum, 20, 80, style="cyan")),
+    )
+    rows.add_row(
+        Text.assemble(("Trend A ", "dim"), ("[", "dim"), (sparkline(history['air_score']), "green"), ("]", "dim")),
+        Text.assemble(("Trend T ", "dim"), ("[", "dim"), (sparkline(history['temp']), "orange3"), ("]", "dim")),
+    )
+    rows.add_row(
+        Text.assemble(("Trend H ", "dim"), ("[", "dim"), (sparkline(history['hum']), "cyan"), ("]", "dim")),
+        Text.assemble(("State ", "dim"), (air_state, status_style(air_state))),
+    )
+    rows.add_row(Text(f"Sample {state.get('ts', '-')}", style="dim"), Text(f"JSON {json_status}", style="dim"))
 
     return Panel(rows, title="AIR SENSOR NODE", box=box.ROUNDED, border_style="green")
 
@@ -272,6 +296,14 @@ def make_geiger_panel(state: dict, json_status: str, history: dict[str, deque], 
     pulse = "☢ PULSE" if (cps or 0) > 0 and pulse_frame % 2 == 0 else "idle"
     pulse_style = "bold bright_yellow" if "PULSE" in pulse else "dim"
 
+    risk = "NORMAL"
+    if status == "ALERT":
+        risk = "HIGH"
+    elif status == "WATCH":
+        risk = "ELEVATED"
+    elif status == "STALE":
+        risk = "STALE"
+
     rows = Table.grid(expand=True)
     status_line = Text()
     status_line.append("Status: ")
@@ -286,9 +318,22 @@ def make_geiger_panel(state: dict, json_status: str, history: dict[str, deque], 
     metrics = Table.grid(expand=True)
     metrics.add_column(ratio=1)
     metrics.add_column(ratio=1)
-    metrics.add_column(ratio=1)
-    metrics.add_row(f"CPM: [bold bright_yellow]{fmt_int(cpm)}[/]", f"CPS: [bold]{fmt_int(cps)}[/]", f"Total: [bold]{fmt_int(total)}[/]")
-    metrics.add_row(f"Dose: [bold cyan]{fmt(dose, 2, ' uSv/h')}[/]", f"ms: [dim]{fmt_int(ms)}[/]", f"Pulse: [{pulse_style}]{pulse}[/]")
+    metrics.add_row(
+        f"CPM [bold bright_yellow]{fmt_int(cpm)}[/]",
+        f"CPS [bold]{fmt_int(cps)}[/]",
+    )
+    metrics.add_row(
+        f"Dose [bold cyan]{fmt(dose, 2, ' uSv/h')}[/]",
+        f"Total [bold]{fmt_int(total)}[/]",
+    )
+    metrics.add_row(
+        f"ms [dim]{fmt_int(ms)}[/]",
+        f"Pulse [{pulse_style}]{pulse}[/]",
+    )
+    metrics.add_row(
+        f"Risk [bold]{risk}[/]",
+        f"JSON [{status_style(json_status)}]{json_status}[/]",
+    )
     rows.add_row(metrics)
     rows.add_row("")
     rows.add_row(Text.assemble(("Activity  "), bar(cpm, 0, 120, style="bright_yellow")))
@@ -307,10 +352,30 @@ def make_health_panel(geiger_json: str, air_json: str, start: float) -> Panel:
     line.append(geiger_json, style=status_style(geiger_json))
     line.append(" | Air JSON: ")
     line.append(air_json, style=status_style(air_json))
-    line.append(f" | Last refresh: {datetime.now().strftime('%H:%M:%S')}")
+    line.append(f" | Refresh: {datetime.now().strftime('%H:%M:%S')}")
     line.append(f" | Runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
     line.append(f" | Base: {BASE_DIR}", style="dim")
     return Panel(line, title="SESSION HEALTH", box=box.ROUNDED, border_style="bright_blue")
+
+
+def make_status_strip(air: dict, geiger: dict) -> Panel:
+    air_age = age_from_state(air)
+    geiger_age = age_from_state(geiger)
+    strip = Table.grid(expand=True)
+    strip.add_column(ratio=1)
+    strip.add_column(ratio=1)
+    strip.add_column(ratio=1)
+    strip.add_row(
+        status_badge("AIR", status_by_age(air_age)),
+        status_badge("GEIGER", geiger_status(geiger, geiger_age)),
+        Text.assemble(("AIR AGE ", "dim"), (fmt(air_age, 1, "s"), "bright_white")),
+    )
+    strip.add_row(
+        Text.assemble(("GEIGER AGE ", "dim"), (fmt(geiger_age, 1, "s"), "bright_white")),
+        Text.assemble(("AIR STATE ", "dim"), (str(air.get("state", "-")), status_style(str(air.get("state", "-"))))),
+        Text.assemble(("GEIGER STATE ", "dim"), (str(geiger.get("status", "-")), status_style(str(geiger.get("status", "-"))))),
+    )
+    return Panel(strip, title="LIVE STATUS", box=box.ROUNDED, border_style="bright_cyan")
 
 
 def clean_air_line(line: str) -> str:
@@ -365,6 +430,7 @@ def build_dashboard(history: dict[str, deque], start: float, pulse_frame: int):
 
     return Group(
         make_header(),
+        make_status_strip(air, geiger),
         main,
         make_event_stream(),
     )
