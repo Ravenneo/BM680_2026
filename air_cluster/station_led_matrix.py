@@ -74,18 +74,21 @@ def state_age_seconds(state: dict[str, Any]) -> float | None:
 
 def base_rgb(base_state: str, t: float) -> tuple[int, int, int]:
     palette = {
-        "GOOD": (22, 118, 124),
+        "GOOD": (28, 145, 74),
         "OK": (34, 135, 82),
         "VENTILATE": (170, 132, 32),
         "BAD": (185, 62, 28),
         "UNKNOWN": (36, 72, 86),
-        "SENSOR_WARMUP": (28, 78, 102),
+        "SENSOR_WARMUP": (128, 92, 34),
         "STALE": (32, 50, 60),
     }
     r, g, b = palette.get(base_state, palette["UNKNOWN"])
-    if base_state in ("GOOD", "UNKNOWN", "SENSOR_WARMUP"):
+    if base_state == "UNKNOWN":
         blue_drift = 0.35 + 0.25 * (0.5 + 0.5 * math.sin(t * 0.09))
         return int(r * (1.0 - blue_drift * 0.45)), int(g), int(b * (1.0 + blue_drift * 0.38))
+    if base_state == "SENSOR_WARMUP":
+        heat = 0.74 + 0.26 * (0.5 + 0.5 * math.sin(t * 0.09))
+        return int(r * heat), int(g * heat), int(b * (0.86 + 0.14 * heat))
     if base_state == "BAD":
         heat = 0.88 + 0.12 * (0.5 + 0.5 * math.sin(t * 0.07))
         return int(r * heat), int(g * heat), int(b * heat)
@@ -220,28 +223,42 @@ class PatternEngine:
             else {}
         )
         try:
-            reducing = abs(float(deltas.get("mics_reducing_pct") or 0.0))
-            oxidising = abs(float(deltas.get("mics_oxidising_pct") or 0.0))
-            nh3 = abs(float(deltas.get("mics_nh3_pct") or 0.0))
+            reducing_raw = deltas.get("mics_reducing_pct")
+            oxidising_raw = deltas.get("mics_oxidising_pct")
+            nh3_raw = deltas.get("mics_nh3_pct")
+            reducing = abs(float(reducing_raw)) if reducing_raw is not None else None
+            oxidising = abs(float(oxidising_raw)) if oxidising_raw is not None else None
+            nh3 = abs(float(nh3_raw)) if nh3_raw is not None else None
         except (TypeError, ValueError):
-            reducing = oxidising = nh3 = 0.0
+            reducing = oxidising = nh3 = None
 
-        pulse = 0.35 + 0.45 * (0.5 + 0.5 * math.sin(t * 0.16))
+        pulse = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(t * 0.16))
         central = abs(x - w // 2) + abs(y - h // 2) <= 1
         corner_or_diag = (x in (0, w - 1) and y in (0, h - 1)) or x == y or x == w - 1 - y
         lower_edge = y == h - 1 or (y == h - 2 and x in (1, w - 2))
 
+        def channel_amount(value: float | None, scale: float, maximum: float) -> float:
+            if value is None:
+                return 0.0
+            return clamp(0.08 + (value / scale), 0.08, maximum) * pulse
+
         if accent_state == "SENSOR_ERROR" and corner_or_diag:
             slow_pulse = 0.20 + 0.35 * (0.5 + 0.5 * math.sin(t * 0.045))
             return (130, 32, 30), slow_pulse
-        if accent_state in ("REDUCING_EVENT", "MIXED_EVENT") and central:
-            strength = clamp((reducing / 100.0) + 0.10, 0.08, 0.28) * pulse
+        if central and reducing is not None:
+            strength = channel_amount(reducing, 55.0, 0.62)
+            if accent_state not in ("REDUCING_EVENT", "MIXED_EVENT"):
+                strength *= 0.58
             return (190, 44, 34), strength
-        if accent_state in ("OXIDISING_EVENT", "MIXED_EVENT") and corner_or_diag:
-            strength = clamp((oxidising / 140.0) + 0.10, 0.08, 0.30) * pulse
+        if corner_or_diag and oxidising is not None:
+            strength = channel_amount(oxidising, 70.0, 0.58)
+            if accent_state not in ("OXIDISING_EVENT", "MIXED_EVENT"):
+                strength *= 0.58
             return (215, 58, 205), strength
-        if accent_state in ("NH3_EVENT", "MIXED_EVENT") and lower_edge:
-            strength = clamp((nh3 / 100.0) + 0.10, 0.08, 0.26) * pulse
+        if lower_edge and nh3 is not None:
+            strength = channel_amount(nh3, 55.0, 0.56)
+            if accent_state not in ("NH3_EVENT", "MIXED_EVENT"):
+                strength *= 0.58
             return (165, 150, 38), strength
         return None, 0.0
 
@@ -276,6 +293,7 @@ class PatternEngine:
                 accent, amount = self.accent_for_pixel(accent_state, state, x, y, t)
                 if accent is not None:
                     pixel_color = blend_color(pixel_color, accent, amount)
+                    intensity = max(intensity, lerp(self.min_brightness, self.max_brightness, clamp(amount, 0.0, 1.0)))
 
                 self.matrix.set_pixel(
                     x,

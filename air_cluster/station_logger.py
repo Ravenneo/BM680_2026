@@ -18,7 +18,9 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "config.yaml"
 SCHEMA_VERSION = "air_cluster.sample.v1"
-LOGGER_VERSION = "2026.05.25"
+LOGGER_VERSION = "2026.05.26"
+MIN_PRESSURE_HPA = 300.0
+MAX_PRESSURE_HPA = 1200.0
 
 
 def now_iso() -> str:
@@ -111,18 +113,23 @@ class BME690Adapter:
 
     def _connect(self) -> None:
         try:
-            bme680 = importlib.import_module("bme680")
-            self.module = bme680
             try:
-                sensor = bme680.BME680(bme680.I2C_ADDR_PRIMARY)
+                module = importlib.import_module("bme690")
+                sensor_class = getattr(module, "BME690")
+            except ModuleNotFoundError:
+                module = importlib.import_module("bme680")
+                sensor_class = getattr(module, "BME680")
+            self.module = module
+            try:
+                sensor = sensor_class(module.I2C_ADDR_PRIMARY)
             except Exception:
-                sensor = bme680.BME680(bme680.I2C_ADDR_SECONDARY)
+                sensor = sensor_class(module.I2C_ADDR_SECONDARY)
 
-            sensor.set_humidity_oversample(bme680.OS_2X)
-            sensor.set_pressure_oversample(bme680.OS_4X)
-            sensor.set_temperature_oversample(bme680.OS_8X)
-            sensor.set_filter(bme680.FILTER_SIZE_3)
-            sensor.set_gas_status(bme680.ENABLE_GAS_MEAS)
+            sensor.set_humidity_oversample(module.OS_2X)
+            sensor.set_pressure_oversample(module.OS_4X)
+            sensor.set_temperature_oversample(module.OS_8X)
+            sensor.set_filter(module.FILTER_SIZE_3)
+            sensor.set_gas_status(module.ENABLE_GAS_MEAS)
             sensor.set_gas_heater_temperature(
                 int(self.config.get("heater_temperature_c", 320))
             )
@@ -147,16 +154,21 @@ class BME690Adapter:
                 return {"heat_stable": False}, "BME690 returned no data"
             data = self.sensor.data
             heat_stable = bool(getattr(data, "heat_stable", False))
+            pressure_hpa = float(data.pressure)
+            pressure_error = None
+            if not MIN_PRESSURE_HPA <= pressure_hpa <= MAX_PRESSURE_HPA:
+                pressure_error = f"BME690 pressure out of range: {pressure_hpa:.2f} hPa"
+                heat_stable = False
             gas = float(data.gas_resistance) if heat_stable else None
             return (
                 {
                     "temperature_c": float(data.temperature),
                     "humidity_pct": float(data.humidity),
-                    "pressure_hpa": float(data.pressure),
+                    "pressure_hpa": pressure_hpa,
                     "gas_ohms": gas,
                     "heat_stable": heat_stable,
                 },
-                None,
+                pressure_error,
             )
         except Exception as exc:
             self.error = str(exc)
@@ -488,15 +500,16 @@ def build_sample(
         "mics_oxidising": mics_reading.get("oxidising"),
         "mics_nh3": mics_reading.get("nh3"),
     }
+    baseline_reference = {key: baselines[key].value for key in observed}
     baseline_values: dict[str, float | None] = {}
     for key, value in observed.items():
         baseline_values[key] = baselines[key].update(value)
 
     deltas = {
-        "bme690_gas_pct": rel_delta_pct(observed["bme690_gas_ohms"], baseline_values["bme690_gas_ohms"]),
-        "mics_reducing_pct": rel_delta_pct(observed["mics_reducing"], baseline_values["mics_reducing"]),
-        "mics_oxidising_pct": rel_delta_pct(observed["mics_oxidising"], baseline_values["mics_oxidising"]),
-        "mics_nh3_pct": rel_delta_pct(observed["mics_nh3"], baseline_values["mics_nh3"]),
+        "bme690_gas_pct": rel_delta_pct(observed["bme690_gas_ohms"], baseline_reference["bme690_gas_ohms"]),
+        "mics_reducing_pct": rel_delta_pct(observed["mics_reducing"], baseline_reference["mics_reducing"]),
+        "mics_oxidising_pct": rel_delta_pct(observed["mics_oxidising"], baseline_reference["mics_oxidising"]),
+        "mics_nh3_pct": rel_delta_pct(observed["mics_nh3"], baseline_reference["mics_nh3"]),
     }
     required_keys = [
         key
@@ -522,6 +535,7 @@ def build_sample(
         event = gas_signature
     conf = confidence(errors, warmup, baseline_ready_count, baseline_required_count)
     status = "SENSOR_ERROR" if len(errors) >= 2 else "WARMUP" if warmup else "PARTIAL" if errors else "OK"
+    led_base_state = "SENSOR_WARMUP" if warmup else air_quality_state
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -550,7 +564,7 @@ def build_sample(
         "air_quality_state": air_quality_state,
         "bme690_event": bme690_event,
         "gas_signature": gas_signature,
-        "led_base_state": air_quality_state,
+        "led_base_state": led_base_state,
         "led_accent_state": gas_signature,
         "validity": {
             "status": status,
