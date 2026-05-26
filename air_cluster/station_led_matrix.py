@@ -39,6 +39,14 @@ def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
+def number(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def read_latest(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -64,40 +72,58 @@ def state_age_seconds(state: dict[str, Any]) -> float | None:
     return max(0.0, time.time() - ts)
 
 
-def base_rgb(event: str, state: dict[str, Any], t: float) -> tuple[int, int, int]:
+def base_rgb(base_state: str, t: float) -> tuple[int, int, int]:
     palette = {
-        "CLEAN": (24, 118, 118),
-        "VOC_EVENT": (190, 102, 24),
-        "REDUCING_EVENT": (24, 118, 108),
-        "OXIDISING_EVENT": (24, 105, 126),
-        "NH3_EVENT": (42, 124, 80),
-        "MIXED_EVENT": (34, 112, 106),
-        "SENSOR_WARMUP": (0, 72, 150),
-        "SENSOR_ERROR": (96, 18, 16),
+        "GOOD": (22, 118, 124),
+        "OK": (34, 135, 82),
+        "VENTILATE": (170, 132, 32),
+        "BAD": (185, 62, 28),
+        "UNKNOWN": (36, 72, 86),
+        "SENSOR_WARMUP": (28, 78, 102),
         "STALE": (32, 50, 60),
     }
-    r, g, b = palette.get(event, palette["STALE"])
+    r, g, b = palette.get(base_state, palette["UNKNOWN"])
+    if base_state in ("GOOD", "UNKNOWN", "SENSOR_WARMUP"):
+        blue_drift = 0.35 + 0.25 * (0.5 + 0.5 * math.sin(t * 0.09))
+        return int(r * (1.0 - blue_drift * 0.45)), int(g), int(b * (1.0 + blue_drift * 0.38))
+    if base_state == "BAD":
+        heat = 0.88 + 0.12 * (0.5 + 0.5 * math.sin(t * 0.07))
+        return int(r * heat), int(g * heat), int(b * heat)
+    return r, g, b
 
-    bme = state.get("bme690", {}) if isinstance(state.get("bme690"), dict) else {}
-    voc_score = bme.get("voc_score")
-    try:
-        score_factor = 1.0 - clamp(float(voc_score) / 100.0, 0.0, 1.0)
-    except (TypeError, ValueError):
-        score_factor = 0.25
+
+def derived_air_quality_state(state: dict[str, Any]) -> str:
+    explicit = state.get("led_base_state") or state.get("air_quality_state")
+    if explicit:
+        return str(explicit)
+
+    validity = state.get("validity", {}) if isinstance(state.get("validity"), dict) else {}
+    if validity.get("warmup"):
+        return "UNKNOWN"
+    if validity.get("status") == "SENSOR_ERROR":
+        return "UNKNOWN"
 
     deltas = state.get("delta_percentages", {}) if isinstance(state.get("delta_percentages"), dict) else {}
-    try:
-        bme_gas_delta = float(deltas.get("bme690_gas_pct"))
-    except (TypeError, ValueError):
-        bme_gas_delta = 0.0
-    mics_only = event in ("REDUCING_EVENT", "OXIDISING_EVENT", "NH3_EVENT", "MIXED_EVENT") and bme_gas_delta > -15.0
+    gas_delta = number(deltas.get("bme690_gas_pct"))
+    if gas_delta is None:
+        return "UNKNOWN"
+    if gas_delta <= -30.0:
+        return "BAD"
+    if gas_delta <= -15.0:
+        return "VENTILATE"
+    if gas_delta <= -5.0:
+        return "OK"
+    return "GOOD"
 
-    if event == "CLEAN" or mics_only:
-        blue_drift = 0.35 + 0.25 * (0.5 + 0.5 * math.sin(t * 0.09))
-        return int(r * (1.0 - blue_drift)), int(g), int(b * (1.0 + blue_drift))
-    if event == "VOC_EVENT":
-        return int(r * (1.0 + 0.12 * score_factor)), int(g * 0.9), int(b * 0.6)
-    return r, g, b
+
+def derived_gas_signature(state: dict[str, Any]) -> str:
+    explicit = state.get("led_accent_state") or state.get("gas_signature")
+    if explicit:
+        return str(explicit)
+    event = str(state.get("event_signature") or "CLEAN")
+    if event in ("REDUCING_EVENT", "OXIDISING_EVENT", "NH3_EVENT", "MIXED_EVENT", "SENSOR_ERROR"):
+        return event
+    return "CLEAN"
 
 
 def blend_color(
@@ -147,25 +173,24 @@ class PatternEngine:
             for _ in range(matrix.height)
         ]
 
-    def event_density(self, event: str) -> float:
+    def event_density(self, accent_state: str) -> float:
         return {
             "CLEAN": 0.055,
-            "VOC_EVENT": 0.070,
             "REDUCING_EVENT": 0.065,
             "OXIDISING_EVENT": 0.065,
             "NH3_EVENT": 0.065,
-            "MIXED_EVENT": 0.115,
-            "SENSOR_WARMUP": 0.050,
-            "SENSOR_ERROR": 0.035,
-        "STALE": 0.040,
-        }.get(event, 0.045)
+            "MIXED_EVENT": 0.095,
+            "SENSOR_ERROR": 0.025,
+        }.get(accent_state, 0.045)
 
-    def update_energy(self, event: str) -> None:
-        density = self.event_density(event)
-        if event == "MIXED_EVENT":
-            ignition_high = 0.42
-        elif event == "SENSOR_ERROR":
-            ignition_high = 0.22
+    def update_energy(self, accent_state: str, base_state: str) -> None:
+        density = self.event_density(accent_state)
+        if accent_state == "MIXED_EVENT":
+            ignition_high = 0.36
+        elif accent_state == "SENSOR_ERROR":
+            ignition_high = 0.16
+        elif base_state == "BAD":
+            ignition_high = 0.30
         else:
             ignition_high = 0.34
 
@@ -182,7 +207,7 @@ class PatternEngine:
 
     def accent_for_pixel(
         self,
-        event: str,
+        accent_state: str,
         state: dict[str, Any],
         x: int,
         y: int,
@@ -201,25 +226,28 @@ class PatternEngine:
         except (TypeError, ValueError):
             reducing = oxidising = nh3 = 0.0
 
-        pulse = 0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * 0.21))
+        pulse = 0.35 + 0.45 * (0.5 + 0.5 * math.sin(t * 0.16))
         central = abs(x - w // 2) + abs(y - h // 2) <= 1
         corner_or_diag = (x in (0, w - 1) and y in (0, h - 1)) or x == y or x == w - 1 - y
         lower_edge = y == h - 1 or (y == h - 2 and x in (1, w - 2))
 
-        if event in ("REDUCING_EVENT", "MIXED_EVENT") and central:
-            strength = clamp((reducing / 60.0) + 0.18, 0.12, 0.42) * pulse
-            return (175, 36, 28), strength
-        if event in ("OXIDISING_EVENT", "MIXED_EVENT") and corner_or_diag:
-            strength = clamp((oxidising / 60.0) + 0.14, 0.10, 0.36) * pulse
-            return (80, 70, 185), strength
-        if event in ("NH3_EVENT", "MIXED_EVENT") and lower_edge:
-            strength = clamp((nh3 / 60.0) + 0.14, 0.10, 0.34) * pulse
+        if accent_state == "SENSOR_ERROR" and corner_or_diag:
+            slow_pulse = 0.20 + 0.35 * (0.5 + 0.5 * math.sin(t * 0.045))
+            return (130, 32, 30), slow_pulse
+        if accent_state in ("REDUCING_EVENT", "MIXED_EVENT") and central:
+            strength = clamp((reducing / 100.0) + 0.10, 0.08, 0.28) * pulse
+            return (190, 44, 34), strength
+        if accent_state in ("OXIDISING_EVENT", "MIXED_EVENT") and corner_or_diag:
+            strength = clamp((oxidising / 140.0) + 0.10, 0.08, 0.30) * pulse
+            return (215, 58, 205), strength
+        if accent_state in ("NH3_EVENT", "MIXED_EVENT") and lower_edge:
+            strength = clamp((nh3 / 100.0) + 0.10, 0.08, 0.26) * pulse
             return (165, 150, 38), strength
         return None, 0.0
 
-    def draw(self, event: str, state: dict[str, Any], t: float) -> None:
-        self.update_energy(event)
-        base = base_rgb(event, state, t)
+    def draw(self, base_state: str, accent_state: str, state: dict[str, Any], t: float) -> None:
+        self.update_energy(accent_state, base_state)
+        base = base_rgb(base_state, t)
         validity = state.get("validity", {}) if isinstance(state.get("validity"), dict) else {}
         confidence = clamp(float(validity.get("confidence", 0.35) or 0.35), 0.0, 1.0)
         w, h = self.matrix.width, self.matrix.height
@@ -229,13 +257,12 @@ class PatternEngine:
                 organic = 0.80 + self.wobble * math.sin(t * 0.31 + x * 1.17 + y * 0.73)
                 ember = clamp(self.energy[y][x] * organic, 0.0, 1.0)
 
-                if event == "SENSOR_WARMUP":
+                if base_state == "SENSOR_WARMUP":
                     breathe = 0.50 + 0.50 * (0.5 + 0.5 * math.sin(t * 0.24))
                     ember = max(ember, 0.18 + 0.45 * breathe)
-                elif event == "SENSOR_ERROR":
-                    pulse = 0.20 + 0.80 * (0.5 + 0.5 * math.sin(t * 0.11))
-                    ember = max(ember * 0.7, 0.06 + 0.20 * pulse)
-                elif event == "STALE":
+                elif base_state == "BAD":
+                    ember = max(ember, 0.12 + 0.16 * (0.5 + 0.5 * math.sin(t * 0.06)))
+                elif base_state == "STALE":
                     ember = max(ember * 0.65, 0.045)
 
                 intensity = lerp(
@@ -243,10 +270,10 @@ class PatternEngine:
                     self.max_brightness,
                     clamp(ember * lerp(0.62, 1.0, confidence), 0.0, 1.0),
                 )
-                if event == "SENSOR_WARMUP":
+                if base_state == "SENSOR_WARMUP":
                     intensity = max(intensity, 0.18 + 0.22 * (0.5 + 0.5 * math.sin(t * 0.24)))
                 pixel_color = base
-                accent, amount = self.accent_for_pixel(event, state, x, y, t)
+                accent, amount = self.accent_for_pixel(accent_state, state, x, y, t)
                 if accent is not None:
                     pixel_color = blend_color(pixel_color, accent, amount)
 
@@ -291,10 +318,11 @@ def main() -> int:
         state = read_latest(latest_path)
         age = state_age_seconds(state)
         stale = not state or age is None or age > stale_after
-        event = "STALE" if stale else str(state.get("event_signature") or "SENSOR_WARMUP")
+        base_state = "STALE" if stale else derived_air_quality_state(state)
+        accent_state = "CLEAN" if stale else derived_gas_signature(state)
         try:
             assert engine is not None
-            engine.draw(event, state, time.time())
+            engine.draw(base_state, accent_state, state, time.time())
         except Exception as exc:
             logging.warning("LED draw failed: %s", exc)
             matrix = None

@@ -258,10 +258,36 @@ Keep restored legacy BME680 data separate from v2 BME690/MICS6814 data.
 
 ## Sensor Data Notes
 
-- BME690 controls the base air-quality color and IAQ-like local score.
-- MICS6814 channels are qualitative relative measurements only.
-- No MICS6814 ppm claims are made.
-- The LED keeps the calm random ember identity by default and does not use a strict day/night schedule.
+Current stable mode is raw mode. It does not use Bosch BSEC yet.
+
+Architecture:
+
+- BME690 raw backend:
+  - temperature
+  - humidity
+  - pressure
+  - gas_resistance
+  - local rolling baselines
+  - local `air_quality_state`
+- MICS6814 backend:
+  - reducing
+  - oxidising
+  - nh3
+  - relative `gas_signature`
+- LED:
+  - BME690 controls the base air-quality context.
+  - MICS6814 controls accent patterns.
+  - Calm random intensity and organic ember-like flicker are preserved.
+
+The raw BME690 gas signal is treated as a relative air-quality signal, not as a lab-grade IAQ value. The MICS6814 channels are qualitative relative measurements only. No MICS6814 ppm claims are made.
+
+Future BSEC support is documented in [docs/BSEC_ROADMAP.md](docs/BSEC_ROADMAP.md). BSEC must stay optional and behind a config flag; do not make the working raw logger depend on Bosch closed-source binaries.
+
+TODO:
+
+- Add optional BSEC probe tooling without changing `station_logger.py`.
+- Add a config-gated BSEC backend only after it is tested on Air-Station.
+- Keep raw BME690 and MICS6814 logging available as the fallback path.
 
 ## Baseline Calibration
 

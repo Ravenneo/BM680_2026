@@ -381,6 +381,68 @@ def classify_event(
     return events[0] if events else "CLEAN"
 
 
+def _has_sensor_error(errors: list[str], sensor_name: str) -> bool:
+    prefix = f"{sensor_name}:"
+    return any(error.startswith(prefix) for error in errors)
+
+
+def classify_bme690_event(
+    warmup: bool,
+    errors: list[str],
+    deltas: dict[str, float | None],
+    thresholds: dict[str, Any],
+) -> str:
+    if _has_sensor_error(errors, "bme690"):
+        return "SENSOR_ERROR"
+    if warmup:
+        return "SENSOR_WARMUP"
+    voc_delta = deltas.get("bme690_gas_pct")
+    if voc_delta is not None and voc_delta <= float(thresholds.get("voc_delta_pct", -15.0)):
+        return "VOC_EVENT"
+    return "CLEAN"
+
+
+def classify_air_quality_state(
+    warmup: bool,
+    bme690_event: str,
+    deltas: dict[str, float | None],
+) -> str:
+    if warmup or bme690_event in ("SENSOR_WARMUP", "SENSOR_ERROR"):
+        return "UNKNOWN"
+
+    gas_delta = deltas.get("bme690_gas_pct")
+    if gas_delta is None:
+        return "UNKNOWN"
+    if gas_delta <= -30.0:
+        return "BAD"
+    if gas_delta <= -15.0:
+        return "VENTILATE"
+    if gas_delta <= -5.0:
+        return "OK"
+    return "GOOD"
+
+
+def classify_gas_signature(
+    errors: list[str],
+    deltas: dict[str, float | None],
+    thresholds: dict[str, Any],
+) -> str:
+    if _has_sensor_error(errors, "mics6814"):
+        return "SENSOR_ERROR"
+
+    events: list[str] = []
+    if _above_abs(deltas.get("mics_reducing_pct"), thresholds.get("mics_reducing_delta_pct", 20.0)):
+        events.append("REDUCING_EVENT")
+    if _above_abs(deltas.get("mics_oxidising_pct"), thresholds.get("mics_oxidising_delta_pct", 20.0)):
+        events.append("OXIDISING_EVENT")
+    if _above_abs(deltas.get("mics_nh3_pct"), thresholds.get("mics_nh3_delta_pct", 20.0)):
+        events.append("NH3_EVENT")
+
+    if len(events) >= int(thresholds.get("mixed_event_count", 2)):
+        return "MIXED_EVENT"
+    return events[0] if events else "CLEAN"
+
+
 def _above_abs(value: float | None, threshold: Any) -> bool:
     return value is not None and abs(float(value)) >= abs(float(threshold))
 
@@ -446,7 +508,18 @@ def build_sample(
     if baseline_required_count == 0 or baseline_ready_count < baseline_required_count:
         warmup = True
 
-    event = classify_event(warmup, errors, deltas, cfg.get("thresholds", {}))
+    thresholds = cfg.get("thresholds", {})
+    bme690_event = classify_bme690_event(warmup, errors, deltas, thresholds)
+    air_quality_state = classify_air_quality_state(warmup, bme690_event, deltas)
+    gas_signature = classify_gas_signature(errors, deltas, thresholds)
+    if bme690_event == "SENSOR_ERROR" and gas_signature == "SENSOR_ERROR":
+        event = "SENSOR_ERROR"
+    elif warmup:
+        event = "SENSOR_WARMUP"
+    elif bme690_event == "VOC_EVENT":
+        event = "VOC_EVENT"
+    else:
+        event = gas_signature
     conf = confidence(errors, warmup, baseline_ready_count, baseline_required_count)
     status = "SENSOR_ERROR" if len(errors) >= 2 else "WARMUP" if warmup else "PARTIAL" if errors else "OK"
 
@@ -474,6 +547,11 @@ def build_sample(
         "rolling_baselines": baseline_values,
         "delta_percentages": deltas,
         "event_signature": event,
+        "air_quality_state": air_quality_state,
+        "bme690_event": bme690_event,
+        "gas_signature": gas_signature,
+        "led_base_state": air_quality_state,
+        "led_accent_state": gas_signature,
         "validity": {
             "status": status,
             "confidence": conf,
