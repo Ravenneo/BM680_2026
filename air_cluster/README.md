@@ -18,7 +18,8 @@ On Air-Sensor:
     ├── raw_samples.jsonl
     ├── hourly_batches.jsonl
     ├── daily_summary.jsonl
-    └── latest_state.json
+    ├── latest_state.json
+    └── baseline_state.json
 ```
 
 `legacy_bme680/` is reserved for old BME680 history. Keep it separate from `air_station/`.
@@ -31,11 +32,12 @@ air_cluster/data/
 ├── hourly_batches.jsonl
 ├── daily_summary.jsonl
 ├── latest_state.json
+├── baseline_state.json
 ├── archive_status.json
 └── archive_push.log
 ```
 
-JSONL files are append-only. `latest_state.json` and `archive_status.json` are atomically replaced.
+JSONL files are append-only. `latest_state.json`, `baseline_state.json`, and `archive_status.json` are atomically replaced.
 
 ## First-Time Setup
 
@@ -281,11 +283,13 @@ Architecture:
 
 The raw BME690 gas signal is treated as a relative air-quality signal, not as a lab-grade IAQ value. The MICS6814 channels are qualitative relative measurements only. No MICS6814 ppm claims are made.
 
-Future BSEC support is documented in [docs/BSEC_ROADMAP.md](docs/BSEC_ROADMAP.md). BSEC must stay optional and behind a config flag; do not make the working raw logger depend on Bosch closed-source binaries.
+The logger persists rolling baselines to `data/baseline_state.json`, so BME690/MICS6814 relative deltas recover faster after a service restart. A restart still uses the configured warmup window, but it no longer has to relearn every baseline from zero if a valid state file exists.
+
+Future BSEC support is documented in [docs/BSEC_ROADMAP.md](docs/BSEC_ROADMAP.md), with setup steps in [docs/BSEC_SETUP.md](docs/BSEC_SETUP.md). BSEC must stay optional and behind a config flag; do not make the working raw logger depend on Bosch closed-source binaries.
 
 TODO:
 
-- Add optional BSEC probe tooling without changing `station_logger.py`.
+- Run optional BSEC probe tooling on Air-Station and capture the real wrapper output names/units.
 - Add a config-gated BSEC backend only after it is tested on Air-Station.
 - Keep raw BME690 and MICS6814 logging available as the fallback path.
 

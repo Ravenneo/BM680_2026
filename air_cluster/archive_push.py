@@ -55,6 +55,7 @@ def archive_paths(config_path: Path, cfg: dict[str, Any]) -> dict[str, Path]:
         "hourly_batches": resolve_path(base, paths["hourly_batches"]),
         "daily_summary": resolve_path(base, paths["daily_summary"]),
         "latest_state": resolve_path(base, paths["latest_state"]),
+        "baseline_state": resolve_path(base, paths.get("baseline_state", "data/baseline_state.json")),
         "archive_status": resolve_path(base, paths["archive_status"]),
         "archive_log": resolve_path(base, paths["archive_log"]),
     }
@@ -196,6 +197,7 @@ def main() -> int:
             ("hourly_batches", paths["hourly_batches"], True),
             ("daily_summary", paths["daily_summary"], True),
             ("latest_state", paths["latest_state"], False),
+            ("baseline_state", paths["baseline_state"], False),
         ]:
             before = time.time()
             result = rsync_file(archive, local_path, append_mode)

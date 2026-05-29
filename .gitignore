@@ -5,3 +5,7 @@ __pycache__/
 air_batches_15m.jsonl
 air_samples.jsonl
 *.log
+air_cluster/data/
+air_cluster/vendor/
+air_cluster/**/*.zip
+air_cluster/**/*.tar.gz

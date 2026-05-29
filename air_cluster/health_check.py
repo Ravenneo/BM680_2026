@@ -167,6 +167,7 @@ def main() -> int:
         file_report("hourly_batches", paths["hourly_batches"]),
         file_report("daily_summary", paths["daily_summary"]),
         file_report("latest_state", paths["latest_state"]),
+        file_report("baseline_state", paths["baseline_state"]),
         file_report("archive_status", paths["archive_status"]),
         file_report("archive_log", paths["archive_log"]),
     ]

@@ -18,7 +18,8 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "config.yaml"
 SCHEMA_VERSION = "air_cluster.sample.v1"
-LOGGER_VERSION = "2026.05.26"
+LOGGER_VERSION = "2026.05.29"
+BASELINE_STATE_VERSION = "air_cluster.baseline_state.v1"
 MIN_PRESSURE_HPA = 300.0
 MAX_PRESSURE_HPA = 1200.0
 
@@ -98,9 +99,76 @@ class RollingBaseline:
             self.value = ((1.0 - self.alpha) * self.value) + (self.alpha * observed)
         return self.value
 
+    def restore(self, state: dict[str, Any]) -> None:
+        value = state.get("value")
+        if value is not None:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = None
+        if value is not None and math.isfinite(value):
+            self.value = value
+            try:
+                count = int(state.get("count", self.min_samples))
+            except (TypeError, ValueError):
+                count = self.min_samples
+            self.count = max(count, self.min_samples)
+
+        seed_values = state.get("seed_values", [])
+        if isinstance(seed_values, list):
+            self.seed_values = [
+                float(item)
+                for item in seed_values[-self.min_samples :]
+                if isinstance(item, (int, float)) and math.isfinite(float(item))
+            ]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "value": self.value,
+            "count": self.count,
+            "ready": self.ready,
+            "seed_values": self.seed_values,
+        }
+
     @property
     def ready(self) -> bool:
         return self.value is not None and self.count >= self.min_samples
+
+
+def load_baseline_state(path: Path, baselines: dict[str, RollingBaseline]) -> None:
+    if not path.exists():
+        return
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logging.warning("failed to load baseline state from %s: %s", path, exc)
+        return
+    if state.get("schema_version") != BASELINE_STATE_VERSION:
+        logging.warning("ignoring unsupported baseline state version in %s", path)
+        return
+
+    saved = state.get("baselines", {})
+    if not isinstance(saved, dict):
+        return
+    restored = 0
+    for key, baseline in baselines.items():
+        item = saved.get(key)
+        if isinstance(item, dict):
+            before = baseline.value
+            baseline.restore(item)
+            if baseline.value is not None and baseline.value != before:
+                restored += 1
+    if restored:
+        logging.info("restored %s rolling baselines from %s", restored, path)
+
+
+def save_baseline_state(path: Path, baselines: dict[str, RollingBaseline]) -> None:
+    payload = {
+        "schema_version": BASELINE_STATE_VERSION,
+        "timestamp": now_iso(),
+        "baselines": {key: baseline.as_dict() for key, baseline in baselines.items()},
+    }
+    atomic_write_json(path, payload)
 
 
 class BME690Adapter:
@@ -314,6 +382,7 @@ class BatchAccumulator:
             "humidity_pct": bme.get("humidity_pct"),
             "pressure_hpa": bme.get("pressure_hpa"),
             "gas_ohms": bme.get("gas_ohms"),
+            "gas_delta_pct": bme.get("gas_delta_pct"),
             "voc_score": bme.get("voc_score"),
             "mics_reducing": mics.get("reducing"),
             "mics_oxidising": mics.get("oxidising"),
@@ -549,6 +618,8 @@ def build_sample(
             "pressure_hpa": bme_reading.get("pressure_hpa"),
             "gas_ohms": bme_reading.get("gas_ohms"),
             "gas_baseline_ohms": baseline_values["bme690_gas_ohms"],
+            "gas_delta_pct": deltas["bme690_gas_pct"],
+            "gas_baseline_ready": baselines["bme690_gas_ohms"].ready,
             "voc_score": voc_score_from_delta(deltas["bme690_gas_pct"], warmup),
             "heat_stable": bme_reading.get("heat_stable"),
         },
@@ -600,6 +671,7 @@ def main() -> int:
     hourly_path = resolve_path(base_dir, paths["hourly_batches"])
     daily_path = resolve_path(base_dir, paths["daily_summary"])
     latest_path = resolve_path(base_dir, paths["latest_state"])
+    baseline_state_path = resolve_path(base_dir, paths.get("baseline_state", "data/baseline_state.json"))
     data_dir.mkdir(parents=True, exist_ok=True)
 
     bme = BME690Adapter(cfg.get("sensors", {}).get("bme690", {}))
@@ -614,9 +686,12 @@ def main() -> int:
         )
         for key in ("bme690_gas_ohms", "mics_reducing", "mics_oxidising", "mics_nh3")
     }
+    load_baseline_state(baseline_state_path, baselines)
 
     interval = float(cfg["sampling"].get("sample_interval_seconds", 10))
     batch_seconds = float(cfg["sampling"].get("hourly_batch_seconds", 3600))
+    baseline_save_interval = max(1.0, float(baseline_cfg.get("persist_interval_seconds", 60)))
+    last_baseline_save_at = 0.0
     started_at = time.time()
     batch_started_at = time.time()
     batch = BatchAccumulator()
@@ -640,6 +715,9 @@ def main() -> int:
             sample = build_sample(cfg, started_at, baselines, bme_reading, mics_reading, errors)
             append_jsonl(raw_path, sample)
             atomic_write_json(latest_path, sample)
+            if time.time() - last_baseline_save_at >= baseline_save_interval:
+                save_baseline_state(baseline_state_path, baselines)
+                last_baseline_save_at = time.time()
             batch.add_sample(sample)
 
             if time.time() - batch_started_at >= batch_seconds:

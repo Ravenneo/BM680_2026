@@ -6,7 +6,7 @@ This document records the investigation and implementation plan for optional Bos
 
 Air-Station is a Raspberry Pi Zero 2W running Debian 13 on `aarch64` / `arm64`. The BME690 is visible on I2C at `0x76`. The current logger works in raw mode with BME690 readings plus MICS6814 readings.
 
-BSEC/Bosch BME690 software is not installed yet. The current Python virtual environment does not include `bme68x`, `bsecConstants`, or a BSEC wrapper. Do not modify the working `station_logger.py` until BSEC has been installed and tested separately.
+BSEC/Bosch BME690 software is not installed yet. The current Python virtual environment does not include `bme68x`, `bsecConstants`, or a BSEC wrapper. `bsec_probe.py` and [BSEC_SETUP.md](BSEC_SETUP.md) are prepared so Air-Station can be tested separately before changing the working logger.
 
 ## Current Stable Mode
 
@@ -89,7 +89,7 @@ The MICS6814 adds a second independent qualitative gas signature layer. That mak
 - Download the official Bosch BSEC ZIP manually.
 - Store it outside the repo or in a clearly gitignored vendor directory.
 - Build and install the Python wrapper in a separate test virtual environment.
-- Create `air_cluster/bsec_probe.py`.
+- Run `air_cluster/bsec_probe.py`.
 - Test the BME690 at `0x76` without touching `station_logger.py`.
 
 ### Phase 3: Optional Backend
