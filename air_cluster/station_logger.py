@@ -248,6 +248,10 @@ class MICS6814Adapter:
         self.config = config
         self.sensor = None
         self.error: str | None = None
+        self.consecutive_errors = 0
+        self.reconnect_after_errors = max(
+            1, int(self.config.get("reconnect_after_errors", 3))
+        )
         self._connect()
 
     def _connect(self) -> None:
@@ -257,18 +261,26 @@ class MICS6814Adapter:
             self.sensor = klass() if klass else module
             self._set_onboard_led()
             self.error = None
+            self.consecutive_errors = 0
         except Exception as exc:
             self.sensor = None
             self.error = str(exc)
 
     def _set_onboard_led(self) -> None:
-        brightness = float(self.config.get("onboard_led_brightness", 0.0))
+        brightness = clamp(float(self.config.get("onboard_led_brightness", 0.0)), 0.0, 1.0)
+        rgb = self.config.get("onboard_led_rgb", [0, 80, 255])
+        if not isinstance(rgb, (list, tuple)) or len(rgb) != 3:
+            rgb = [0, 80, 255]
+        r, g, b = [int(clamp(float(channel), 0.0, 255.0)) for channel in rgb]
         set_brightness = getattr(self.sensor, "set_brightness", None)
         set_led = getattr(self.sensor, "set_led", None)
         if callable(set_brightness):
-            set_brightness(max(0.0, min(1.0, brightness)))
+            set_brightness(brightness)
         if callable(set_led):
-            set_led(0, 0, 0)
+            if brightness <= 0.0:
+                set_led(0, 0, 0)
+            else:
+                set_led(r, g, b)
 
     def _call_first(self, names: list[str]) -> Any:
         for name in names:
@@ -276,6 +288,11 @@ class MICS6814Adapter:
             if callable(method):
                 return method()
         raise AttributeError(f"none of {names!r} found")
+
+    def _ok(self, reading: dict[str, Any]) -> tuple[dict[str, Any], None]:
+        self.consecutive_errors = 0
+        self.error = None
+        return reading, None
 
     def read(self) -> tuple[dict[str, Any], str | None]:
         if self.sensor is None:
@@ -288,25 +305,34 @@ class MICS6814Adapter:
             if callable(read_all):
                 values = read_all()
                 if isinstance(values, dict):
-                    return (
+                    return self._ok(
                         {
                             "reducing": _first_value(values, ["reducing", "red"]),
                             "oxidising": _first_value(values, ["oxidising", "oxidizing", "ox"]),
                             "nh3": _first_value(values, ["nh3", "ammonia"]),
-                        },
-                        None,
+                        }
+                    )
+                oxidising = getattr(values, "oxidising", None)
+                reducing = getattr(values, "reducing", None)
+                nh3 = getattr(values, "nh3", None)
+                if oxidising is not None and reducing is not None and nh3 is not None:
+                    return self._ok(
+                        {
+                            "reducing": float(reducing),
+                            "oxidising": float(oxidising),
+                            "nh3": float(nh3),
+                        }
                     )
                 if isinstance(values, (list, tuple)) and len(values) >= 3:
-                    return (
+                    return self._ok(
                         {
                             "reducing": float(values[0]),
                             "oxidising": float(values[1]),
                             "nh3": float(values[2]),
-                        },
-                        None,
+                        }
                     )
 
-            return (
+            return self._ok(
                 {
                     "reducing": float(
                         self._call_first(["read_reducing", "get_reducing", "reducing"])
@@ -317,11 +343,19 @@ class MICS6814Adapter:
                         )
                     ),
                     "nh3": float(self._call_first(["read_nh3", "get_nh3", "nh3"])),
-                },
-                None,
+                }
             )
         except Exception as exc:
             self.error = str(exc)
+            self.consecutive_errors += 1
+            if self.consecutive_errors >= self.reconnect_after_errors:
+                logging.warning(
+                    "MICS6814 read failed %s times; reconnecting sensor: %s",
+                    self.consecutive_errors,
+                    self.error,
+                )
+                self.sensor = None
+                self._connect()
             return {}, self.error
 
 

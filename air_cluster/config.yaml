@@ -72,7 +72,9 @@
     },
     "mics6814": {
       "enabled": true,
-      "onboard_led_brightness": 0.0
+      "onboard_led_brightness": 0.35,
+      "onboard_led_rgb": [0, 80, 255],
+      "reconnect_after_errors": 3
     }
   }
 }
