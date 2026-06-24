@@ -20,8 +20,16 @@ DEFAULT_CONFIG = SCRIPT_DIR / "config.yaml"
 SCHEMA_VERSION = "air_cluster.sample.v1"
 LOGGER_VERSION = "2026.05.29"
 BASELINE_STATE_VERSION = "air_cluster.baseline_state.v1"
+MIN_TEMPERATURE_C = -40.0
+MAX_TEMPERATURE_C = 85.0
+MIN_HUMIDITY_PCT = 0.0
+MAX_HUMIDITY_PCT = 100.0
 MIN_PRESSURE_HPA = 300.0
 MAX_PRESSURE_HPA = 1200.0
+
+
+class SensorRecoveryExhausted(RuntimeError):
+    pass
 
 
 def now_iso() -> str:
@@ -46,10 +54,50 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def _is_finite_number(value: Any) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def rel_delta_pct(value: float | None, baseline: float | None) -> float | None:
     if value is None or baseline in (None, 0):
         return None
     return ((float(value) - float(baseline)) / float(baseline)) * 100.0
+
+
+def validate_bme690_reading(reading: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+
+    temperature = reading.get("temperature_c")
+    if temperature is not None:
+        if not _is_finite_number(temperature):
+            issues.append("BME690 temperature is not finite")
+        else:
+            temperature = float(temperature)
+            if not MIN_TEMPERATURE_C <= temperature <= MAX_TEMPERATURE_C:
+                issues.append(
+                    f"BME690 temperature out of range: {temperature:.2f} C"
+                )
+
+    humidity = reading.get("humidity_pct")
+    if humidity is not None:
+        if not _is_finite_number(humidity):
+            issues.append("BME690 humidity is not finite")
+        else:
+            humidity = float(humidity)
+            if not MIN_HUMIDITY_PCT <= humidity <= MAX_HUMIDITY_PCT:
+                issues.append(f"BME690 humidity out of range: {humidity:.3f} %")
+
+    gas_ohms = reading.get("gas_ohms")
+    if gas_ohms is not None:
+        if not _is_finite_number(gas_ohms):
+            issues.append("BME690 gas resistance is not finite")
+        elif float(gas_ohms) <= 0.0:
+            issues.append(f"BME690 gas resistance invalid: {float(gas_ohms):.2f} ohm")
+
+    return issues
 
 
 def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
@@ -177,6 +225,18 @@ class BME690Adapter:
         self.sensor = None
         self.module = None
         self.error: str | None = None
+        self.consecutive_errors = 0
+        self.failures_since_success = 0
+        self.reconnect_attempts_since_success = 0
+        self.reconnect_after_errors = max(
+            1, int(self.config.get("reconnect_after_errors", 3))
+        )
+        self.restart_after_reconnects = max(
+            1, int(self.config.get("restart_after_reconnects", 4))
+        )
+        self.reconnect_delay_seconds = max(
+            0.0, float(self.config.get("reconnect_delay_seconds", 1.5))
+        )
         self._connect()
 
     def _connect(self) -> None:
@@ -211,36 +271,69 @@ class BME690Adapter:
             self.sensor = None
             self.error = str(exc)
 
+    def _ok(self, reading: dict[str, Any]) -> tuple[dict[str, Any], None]:
+        self.consecutive_errors = 0
+        self.failures_since_success = 0
+        self.reconnect_attempts_since_success = 0
+        self.error = None
+        return reading, None
+
+    def _fail(self, reading: dict[str, Any], error: str) -> tuple[dict[str, Any], str]:
+        self.error = error
+        self.consecutive_errors += 1
+        self.failures_since_success += 1
+        if self.consecutive_errors >= self.reconnect_after_errors:
+            self.reconnect_attempts_since_success += 1
+            logging.warning(
+                "BME690 read failed %s times (%s since last success); reconnecting sensor (attempt %s): %s",
+                self.consecutive_errors,
+                self.failures_since_success,
+                self.reconnect_attempts_since_success,
+                self.error,
+            )
+            self.sensor = None
+            if self.reconnect_delay_seconds > 0.0:
+                time.sleep(self.reconnect_delay_seconds)
+            self._connect()
+            self.consecutive_errors = 0
+            if self.reconnect_attempts_since_success >= self.restart_after_reconnects:
+                raise SensorRecoveryExhausted(
+                    "BME690 recovery exhausted after "
+                    f"{self.failures_since_success} failed reads and "
+                    f"{self.reconnect_attempts_since_success} reconnect attempts: {self.error}"
+                )
+        return reading, error
+
     def read(self) -> tuple[dict[str, Any], str | None]:
         if self.sensor is None:
             self._connect()
         if self.sensor is None:
-            return {}, self.error or "BME690 unavailable"
+            return self._fail({}, self.error or "BME690 unavailable")
 
         try:
             if not self.sensor.get_sensor_data():
-                return {"heat_stable": False}, "BME690 returned no data"
+                return self._fail({"heat_stable": False}, "BME690 returned no data")
             data = self.sensor.data
             heat_stable = bool(getattr(data, "heat_stable", False))
             pressure_hpa = float(data.pressure)
-            pressure_error = None
+            reading = {
+                "temperature_c": float(data.temperature),
+                "humidity_pct": float(data.humidity),
+                "pressure_hpa": pressure_hpa,
+                "gas_ohms": float(data.gas_resistance) if heat_stable else None,
+                "heat_stable": heat_stable,
+            }
+            issues = validate_bme690_reading(reading)
             if not MIN_PRESSURE_HPA <= pressure_hpa <= MAX_PRESSURE_HPA:
-                pressure_error = f"BME690 pressure out of range: {pressure_hpa:.2f} hPa"
-                heat_stable = False
-            gas = float(data.gas_resistance) if heat_stable else None
-            return (
-                {
-                    "temperature_c": float(data.temperature),
-                    "humidity_pct": float(data.humidity),
-                    "pressure_hpa": pressure_hpa,
-                    "gas_ohms": gas,
-                    "heat_stable": heat_stable,
-                },
-                pressure_error,
-            )
+                issues.append(f"BME690 pressure out of range: {pressure_hpa:.2f} hPa")
+                reading["heat_stable"] = False
+            if issues:
+                return self._fail(reading, "; ".join(issues))
+            return self._ok(reading)
+        except SensorRecoveryExhausted:
+            raise
         except Exception as exc:
-            self.error = str(exc)
-            return {}, self.error
+            return self._fail({}, str(exc))
 
 
 class MICS6814Adapter:
@@ -595,7 +688,9 @@ def build_sample(
 ) -> dict[str, Any]:
     node = cfg["node"]
     baseline_cfg = cfg.get("baselines", {})
-    warmup = (time.time() - started_at) < float(cfg["sampling"].get("warmup_seconds", 600))
+    startup_warmup_active = (time.time() - started_at) < float(
+        cfg["sampling"].get("warmup_seconds", 600)
+    )
 
     observed = {
         "bme690_gas_ohms": bme_reading.get("gas_ohms"),
@@ -621,6 +716,15 @@ def build_sample(
     ]
     baseline_ready_count = sum(1 for key in required_keys if baselines[key].ready)
     baseline_required_count = len(required_keys)
+    bme_heat_stable = bool(bme_reading.get("heat_stable"))
+    bme_gas_ready = bme_reading.get("gas_ohms") is not None
+    warmup = startup_warmup_active and not (
+        baseline_required_count > 0
+        and baseline_ready_count >= baseline_required_count
+        and bme_heat_stable
+        and bme_gas_ready
+        and not _has_sensor_error(errors, "bme690")
+    )
     if baseline_required_count == 0 or baseline_ready_count < baseline_required_count:
         warmup = True
 
@@ -628,7 +732,8 @@ def build_sample(
     bme690_event = classify_bme690_event(warmup, errors, deltas, thresholds)
     air_quality_state = classify_air_quality_state(warmup, bme690_event, deltas)
     gas_signature = classify_gas_signature(errors, deltas, thresholds)
-    if bme690_event == "SENSOR_ERROR" and gas_signature == "SENSOR_ERROR":
+    sensor_error = bme690_event == "SENSOR_ERROR" or gas_signature == "SENSOR_ERROR"
+    if sensor_error:
         event = "SENSOR_ERROR"
     elif warmup:
         event = "SENSOR_WARMUP"
@@ -637,8 +742,14 @@ def build_sample(
     else:
         event = gas_signature
     conf = confidence(errors, warmup, baseline_ready_count, baseline_required_count)
-    status = "SENSOR_ERROR" if len(errors) >= 2 else "WARMUP" if warmup else "PARTIAL" if errors else "OK"
-    led_base_state = "SENSOR_WARMUP" if warmup else air_quality_state
+    status = "SENSOR_ERROR" if sensor_error else "WARMUP" if warmup else "PARTIAL" if errors else "OK"
+    if warmup:
+        led_base_state = "SENSOR_WARMUP"
+    elif sensor_error:
+        led_base_state = "SENSOR_ERROR"
+    else:
+        led_base_state = air_quality_state
+    led_accent_state = "SENSOR_ERROR" if sensor_error else gas_signature
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -670,7 +781,7 @@ def build_sample(
         "bme690_event": bme690_event,
         "gas_signature": gas_signature,
         "led_base_state": led_base_state,
-        "led_accent_state": gas_signature,
+        "led_accent_state": led_accent_state,
         "validity": {
             "status": status,
             "confidence": conf,
@@ -737,7 +848,13 @@ def main() -> int:
         loop_started = time.time()
         errors: list[str] = []
 
-        bme_reading, bme_error = bme.read()
+        try:
+            bme_reading, bme_error = bme.read()
+        except SensorRecoveryExhausted:
+            logging.exception(
+                "BME690 recovery exhausted; exiting so systemd can restart the logger"
+            )
+            raise
         if bme_error:
             errors.append(f"bme690: {bme_error}")
 

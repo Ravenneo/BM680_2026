@@ -146,6 +146,7 @@ def main() -> int:
     parser.add_argument("--archive-max-age-seconds", type=float, default=7200.0)
     parser.add_argument("--max-disk-used-percent", type=float, default=90.0)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--jsonl", action="store_true")
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
@@ -254,7 +255,9 @@ def main() -> int:
         "checks": checks,
     }
 
-    if args.json:
+    if args.jsonl:
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    elif args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(f"node: {result['node']}")

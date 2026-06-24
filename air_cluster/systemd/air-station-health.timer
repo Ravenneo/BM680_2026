@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Air-Station health check periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=air-station-health.service
+
+[Install]
+WantedBy=timers.target

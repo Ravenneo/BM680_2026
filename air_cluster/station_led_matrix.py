@@ -17,6 +17,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "config.yaml"
 
 
+class MatrixRecoveryExhausted(RuntimeError):
+    pass
+
+
 def load_config(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     try:
@@ -78,11 +82,15 @@ def base_rgb(base_state: str, t: float) -> tuple[int, int, int]:
         "OK": (34, 135, 82),
         "VENTILATE": (170, 132, 32),
         "BAD": (185, 62, 28),
+        "SENSOR_ERROR": (138, 32, 24),
         "UNKNOWN": (36, 72, 86),
         "SENSOR_WARMUP": (128, 92, 34),
         "STALE": (32, 50, 60),
     }
     r, g, b = palette.get(base_state, palette["UNKNOWN"])
+    if base_state == "SENSOR_ERROR":
+        pulse = 0.72 + 0.28 * (0.5 + 0.5 * math.sin(t * 0.12))
+        return int(r * pulse), int(g * pulse), int(b * pulse)
     if base_state == "UNKNOWN":
         blue_drift = 0.35 + 0.25 * (0.5 + 0.5 * math.sin(t * 0.09))
         return int(r * (1.0 - blue_drift * 0.45)), int(g), int(b * (1.0 + blue_drift * 0.38))
@@ -104,7 +112,7 @@ def derived_air_quality_state(state: dict[str, Any]) -> str:
     if validity.get("warmup"):
         return "UNKNOWN"
     if validity.get("status") == "SENSOR_ERROR":
-        return "UNKNOWN"
+        return "SENSOR_ERROR"
 
     deltas = state.get("delta_percentages", {}) if isinstance(state.get("delta_percentages"), dict) else {}
     gas_delta = number(deltas.get("bme690_gas_pct"))
@@ -151,6 +159,9 @@ class Matrix:
         self.matrix.set_brightness(brightness)
         self.width = self.matrix.width
         self.height = self.matrix.height
+
+    def clear(self) -> None:
+        self.matrix.clear()
 
     def set_pixel(self, x: int, y: int, r: int, g: int, b: int, brightness: float = 1.0) -> None:
         self.matrix.set_pixel(x, y, r, g, b, brightness=brightness)
@@ -293,7 +304,10 @@ class PatternEngine:
                 accent, amount = self.accent_for_pixel(accent_state, state, x, y, t)
                 if accent is not None:
                     pixel_color = blend_color(pixel_color, accent, amount)
-                    intensity = max(intensity, lerp(self.min_brightness, self.max_brightness, clamp(amount, 0.0, 1.0)))
+                    intensity = max(
+                        intensity,
+                        lerp(self.min_brightness, self.max_brightness, clamp(amount, 0.0, 1.0)),
+                    )
 
                 self.matrix.set_pixel(
                     x,
@@ -304,6 +318,39 @@ class PatternEngine:
                     brightness=clamp(intensity, 0.0, 1.0),
                 )
         self.matrix.show()
+
+
+def record_failure(
+    failures: list[float],
+    *,
+    window_seconds: float,
+    restart_after_failures: int,
+    reason: str,
+) -> None:
+    now = time.time()
+    failures[:] = [ts for ts in failures if now - ts <= window_seconds]
+    failures.append(now)
+    logging.warning(
+        "RGB Matrix recovery failure %s/%s within %.0fs: %s",
+        len(failures),
+        restart_after_failures,
+        window_seconds,
+        reason,
+    )
+    if len(failures) >= restart_after_failures:
+        raise MatrixRecoveryExhausted(
+            f"RGB Matrix recovery exhausted after {len(failures)} failures in {window_seconds:.0f}s: {reason}"
+        )
+
+
+def quiesce_matrix(matrix: Matrix | None) -> None:
+    if matrix is None:
+        return
+    try:
+        matrix.clear()
+        matrix.show()
+    except Exception:
+        logging.debug("failed to quiesce RGB Matrix", exc_info=True)
 
 
 def main() -> int:
@@ -318,33 +365,88 @@ def main() -> int:
     led_cfg = cfg.get("led", {})
     frame_interval = float(led_cfg.get("frame_interval_seconds", 0.35))
     stale_after = float(led_cfg.get("stale_after_seconds", 120.0))
+    reinit_interval = max(0.0, float(led_cfg.get("reinit_interval_seconds", 600.0)))
+    init_backoff = max(0.2, float(led_cfg.get("init_backoff_seconds", 5.0)))
+    post_init_settle = max(0.0, float(led_cfg.get("post_init_settle_seconds", 0.15)))
+    failure_window = max(5.0, float(led_cfg.get("failure_window_seconds", 90.0)))
+    restart_after_failures = max(1, int(led_cfg.get("restart_after_failures", 3)))
 
     matrix: Matrix | None = None
     engine: PatternEngine | None = None
+    initialized_at = 0.0
+    last_state: tuple[str, str, bool] | None = None
+    recovery_failures: list[float] = []
 
     while True:
         if matrix is None:
             try:
                 matrix = Matrix(float(led_cfg.get("brightness", 0.45)))
                 engine = PatternEngine(matrix, led_cfg)
+                initialized_at = time.time()
+                last_state = None
+                recovery_failures.clear()
                 logging.info("RGB Matrix 5x5 initialized")
+                if post_init_settle > 0.0:
+                    time.sleep(post_init_settle)
             except Exception as exc:
+                try:
+                    record_failure(
+                        recovery_failures,
+                        window_seconds=failure_window,
+                        restart_after_failures=restart_after_failures,
+                        reason=f"init failed: {exc}",
+                    )
+                except MatrixRecoveryExhausted:
+                    logging.exception("RGB Matrix recovery exhausted during initialization")
+                    raise
                 logging.warning("RGB Matrix unavailable: %s", exc)
-                time.sleep(10)
+                time.sleep(init_backoff)
                 continue
+
+        if reinit_interval and (time.time() - initialized_at) >= reinit_interval:
+            logging.info(
+                "Restarting RGB Matrix 5x5 process after %.0fs for clean controller rearm",
+                time.time() - initialized_at,
+            )
+            quiesce_matrix(matrix)
+            return 0
 
         state = read_latest(latest_path)
         age = state_age_seconds(state)
         stale = not state or age is None or age > stale_after
         base_state = "STALE" if stale else derived_air_quality_state(state)
         accent_state = "CLEAN" if stale else derived_gas_signature(state)
+        current_state = (base_state, accent_state, stale)
+        if current_state != last_state:
+            logging.info(
+                "LED state base=%s accent=%s stale=%s age=%.1fs",
+                base_state,
+                accent_state,
+                stale,
+                age if age is not None else -1.0,
+            )
+            last_state = current_state
         try:
             assert engine is not None
             engine.draw(base_state, accent_state, state, time.time())
         except Exception as exc:
-            logging.warning("LED draw failed: %s", exc)
+            quiesce_matrix(matrix)
             matrix = None
             engine = None
+            initialized_at = 0.0
+            try:
+                record_failure(
+                    recovery_failures,
+                    window_seconds=failure_window,
+                    restart_after_failures=restart_after_failures,
+                    reason=f"draw failed: {exc}",
+                )
+            except MatrixRecoveryExhausted:
+                logging.exception("RGB Matrix recovery exhausted during drawing")
+                raise
+            logging.warning("LED draw failed: %s", exc)
+            time.sleep(0.5)
+            continue
         time.sleep(max(0.05, frame_interval))
 
 

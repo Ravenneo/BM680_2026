@@ -1,0 +1,10 @@
+[Unit]
+Description=Air-Station health check snapshot
+After=air-station-logger.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/BM680_2026/air_cluster
+ExecStart=/bin/sh -c '/home/pi/BM680_2026/air_cluster/.venv/bin/python /home/pi/BM680_2026/air_cluster/health_check.py --config /home/pi/BM680_2026/air_cluster/config.yaml --jsonl >> /home/pi/BM680_2026/air_cluster/data/health_check.jsonl'

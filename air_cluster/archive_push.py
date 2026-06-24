@@ -99,6 +99,43 @@ def run_command(cmd: list[str], timeout: float = 120.0) -> subprocess.CompletedP
     )
 
 
+def run_command_with_retries(
+    cmd: list[str],
+    *,
+    timeout: float,
+    attempts: int = 3,
+    backoff_seconds: float = 5.0,
+) -> subprocess.CompletedProcess[str]:
+    last_result: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            result = run_command(cmd, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout
+            stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+            result = subprocess.CompletedProcess(
+                cmd,
+                124,
+                stdout=(stdout or ""),
+                stderr=(stderr or f"timed out after {timeout:.0f}s"),
+            )
+        last_result = result
+        if result.returncode == 0:
+            return result
+        if attempt < attempts:
+            error = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+            logging.warning(
+                "command failed on attempt %s/%s; retrying in %.1fs: %s",
+                attempt,
+                attempts,
+                backoff_seconds,
+                error,
+            )
+            time.sleep(backoff_seconds)
+    assert last_result is not None
+    return last_result
+
+
 def ensure_remote_dir(archive: dict[str, Any]) -> subprocess.CompletedProcess[str]:
     remote_dir = archive["remote_dir"]
     cmd = [
@@ -107,7 +144,7 @@ def ensure_remote_dir(archive: dict[str, Any]) -> subprocess.CompletedProcess[st
         ssh_target(archive),
         f"mkdir -p {remote_dir}",
     ]
-    return run_command(cmd, timeout=30)
+    return run_command_with_retries(cmd, timeout=30, attempts=3, backoff_seconds=5)
 
 
 def rsync_file(
@@ -132,7 +169,7 @@ def rsync_file(
     if append_mode:
         cmd.append("--append-verify")
     cmd.extend([str(local_path), remote])
-    return run_command(cmd, timeout=180)
+    return run_command_with_retries(cmd, timeout=180, attempts=3, backoff_seconds=5)
 
 
 def write_status(
